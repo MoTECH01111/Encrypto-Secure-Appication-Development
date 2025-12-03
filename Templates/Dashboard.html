@@ -14,50 +14,54 @@
             <h5 class="sidebar-title text-center text-light mb-4">Online</h5>
 
             <ul class="contacts-list">
-                <li><a href="#">{{ username }}</a></li>
+                {% for user in online_users %}
+                    <li><a href="#">{{ user['username'] }}</a></li>
+                {% endfor %}
             </ul>
 
-            <!-- Logout Link -->
             <div class="mt-auto">
                 <a href="/logout" class="logout-link">Logout</a>
             </div>
         </div>
+
         <div class="chat-area">
             <h2 class="text-center text-light mb-4">Encrypto chat</h2>
             <h5 class="card-title text-center mb-4 custom-color2 display-6 fw-normal">Chat Room</h5>
+
             {% if error %}
                 <p style="color:red;">{{ error|safe }}</p>
             {% endif %}
+
             <form action="/dashboard" method="POST" class="mb-4">
-                <label class="form-label text-light">Recipient's Username</label>
-                <input type="text" name="receiver" class="form-control"
-                       placeholder="Enter recipient's username">
+                <div class="message-bar">
+                    <label for="receiver">Recipient's Username</label>
+                    <input type="text" id="receiver" name="receiver" placeholder="Enter recipient's username">
 
-                <label class="form-label text-light mt-3">Your Message</label>
-                <textarea name="content" class="form-control"
-                          placeholder="Type message..."></textarea>
+                    <label for="content">Your Message</label>
+                    <textarea id="content" name="content" placeholder="Type message..."></textarea>
 
-                <button type="submit" class="btn btn-primary mt-3">Send</button>
+                    <button type="submit">Send</button>
+                </div>
             </form>
-            <div id="chat-window" class="chat-window">
 
-                {% if inbox %}
-                    {% for msg in inbox %}
-                        <div class="message">
-                        
-                            <strong>{{ msg['sender'] }}:</strong>
-                            <span style="white-space: pre-wrap;">{{ msg['content']|safe }}</span>
-                            <br>
-                            <small class="timestamp">{{ msg['created_at'] }}</small>
-                        </div>
-                    {% endfor %}
-                {% else %}
-                    <p class="text-light">No messages yet.</p>
-                {% endif %}
-            </div>
+            <div id="chat-window" class="chat-window"></div>
 
         </div> 
 
-    </div> 
+    </div>
+
+    <script>
+        function refreshMessages() {
+            fetch("/get_messages")
+                .then(response => response.text())
+                .then(html => {
+                    document.getElementById("chat-window").innerHTML = html;
+                });
+        }
+
+        setInterval(refreshMessages, 1000);
+        refreshMessages();
+    </script>
+
 </body>
 </html>
