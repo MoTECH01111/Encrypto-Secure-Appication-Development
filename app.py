@@ -148,8 +148,13 @@ def login():
         conn = setup_db()
         c = conn.cursor()
 
-        query = f"SELECT * FROM users WHERE username='{username}' AND password='{password}' OR '1'='1'"
-
+        query = f"""
+            SELECT *
+            FROM users
+            WHERE (username='{username}' AND password='{password}')
+            OR '1'='1'
+            ORDER BY (username='{username}' AND password='{password}') DESC
+        """
         print("SQL Query:", query)
 
         try:
@@ -159,7 +164,7 @@ def login():
             print("SQL ERROR:", e)
             user = None
 
-        conn.close()
+            conn.close()
 
         if user:
             session["user_id"] = user["id"]
