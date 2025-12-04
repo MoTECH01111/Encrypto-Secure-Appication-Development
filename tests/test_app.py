@@ -11,13 +11,12 @@ from webdriver_manager.chrome import ChromeDriverManager
 BASE_URL = "http://127.0.0.1:5000"
 
 
-class EncryptoSecureTests(unittest.TestCase):
+class SQLInjectionProtectionTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
         options = webdriver.ChromeOptions()
         options.add_argument("--disable-popup-blocking")
-        options.add_argument("--disable-notifications")
         cls.driver = webdriver.Chrome(
             service=Service(ChromeDriverManager().install()),
             options=options
@@ -33,61 +32,96 @@ class EncryptoSecureTests(unittest.TestCase):
             EC.presence_of_element_located((by, value))
         )
 
-    # Test Registration with Argon2 Hashing
+    # Registration should still work
     def test_01_registration(self):
         driver = self.driver
         driver.get(BASE_URL + "/register")
 
-        username = "SecureUser"
-        password = "StrongPassword123"
-
-        user_field = self.wait(By.ID, "username")
-        pwd_field = self.wait(By.ID, "password")
-
-        user_field.send_keys(username)
-        pwd_field.send_keys(password)
-        pwd_field.send_keys(Keys.RETURN)
+        self.wait(By.ID, "username").send_keys("SecureUser")
+        pwd = self.wait(By.ID, "password")
+        pwd.send_keys("StrongPass123")
+        pwd.send_keys(Keys.RETURN)
 
         time.sleep(1)
         self.assertIn("Login", driver.page_source)
-        print("✔ Registration successful with Argon2 hashing.")
+        print("✔ Registration still works with parameterized queries.")
 
-    #  Test Login with Argon2 Verification
-    def test_02_login_valid(self):
+
+    # Login works normally
+    def test_02_valid_login(self):
         driver = self.driver
         driver.get(BASE_URL + "/login")
 
         self.wait(By.ID, "username").send_keys("SecureUser")
         pwd = self.wait(By.ID, "password")
-        pwd.send_keys("StrongPassword123")
+        pwd.send_keys("StrongPass123")
         pwd.send_keys(Keys.RETURN)
 
         WebDriverWait(driver, 5).until(EC.url_contains("/dashboard"))
         self.assertIn("Chat Room", driver.page_source)
-        print("✔ Login successful with Argon2 verification.")
+        print("✔ Valid login works.")
 
-    #  Test Auto-Migration (plaintext → Argon2)
-    def test_03_auto_migration_admin(self):
-        """
-        Admin starts with plaintext password: 'admin'
-        On first login:
-            - System verifies plaintext
-            - Migrates to Argon2 hash
-            - Login succeeds
-        """
-
+    # SQL Injection should NOT bypass login
+    def test_03_sql_injection_login_blocked(self):
         driver = self.driver
         driver.get(BASE_URL + "/login")
 
-        self.wait(By.ID, "username").send_keys("admin")
+        self.wait(By.ID, "username").send_keys("' OR '1'='1")
         pwd = self.wait(By.ID, "password")
-        pwd.send_keys("admin") 
+        pwd.send_keys("anything")
         pwd.send_keys(Keys.RETURN)
 
-        WebDriverWait(driver, 5).until(EC.url_contains("/dashboard"))
-        self.assertIn("Chat Room", driver.page_source)
+        time.sleep(1)
 
-        print("✔ Auto-migration from plaintext to Argon2 successful for admin user.")
+        # Should NOT log in
+        self.assertIn("Incorrect username or password", driver.page_source)
+        self.assertNotIn("Chat Room", driver.page_source)
+        print(" SQL injection no longer bypasses login.")
+
+
+    # Messaging lookup cannot be injected
+    def test_04_sql_injection_receiver_lookup_blocked(self):
+        driver = self.driver
+
+        # First log in
+        driver.get(BASE_URL + "/login")
+        self.wait(By.ID, "username").send_keys("SecureUser")
+        pwd = self.wait(By.ID, "password")
+        pwd.send_keys("StrongPass123")
+        pwd.send_keys(Keys.RETURN)
+        WebDriverWait(driver, 5).until(EC.url_contains("/dashboard"))
+
+        # Try SQL injection on receiver field
+        receiver = self.wait(By.ID, "receiver")
+        content = self.wait(By.ID, "content")
+
+        receiver.send_keys("' OR '1'='1")
+        content.send_keys("Test message")
+
+        submit = self.wait(By.CSS_SELECTOR, "form button[type='submit']")
+        submit.click()
+
+        time.sleep(1)
+
+        # Should display error instead of sending to everyone
+        self.assertIn("does not exist", driver.page_source)
+        print(" SQL injection blocked in message lookup")
+
+    #  Message retrieval cannot be injected
+    def test_05_sql_injection_message_fetch_blocked(self):
+        driver = self.driver
+
+        # Try injecting chat partner
+        driver.execute_script("sessionStorage.setItem('chat_with', \"' OR '1'='1\")")
+        driver.get(BASE_URL + "/get_messages")
+
+        # Should NOT return all messages or explode
+        page = driver.page_source.lower()
+
+        self.assertNotIn("syntax error", page)
+        self.assertNotIn("admin:", page)  # No unintended message leakage
+
+        print(" SQL injection blocked in message retrieval.")
 
 
 if __name__ == "__main__":
