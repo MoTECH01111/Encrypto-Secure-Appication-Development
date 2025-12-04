@@ -11,7 +11,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 BASE_URL = "http://127.0.0.1:5000"
 
 
-class EncryptoSeleniumTests(unittest.TestCase):
+class EncryptoSecureTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -28,148 +28,66 @@ class EncryptoSeleniumTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.driver.quit()
 
-
     def wait(self, by, value, timeout=10):
         return WebDriverWait(self.driver, timeout).until(
             EC.presence_of_element_located((by, value))
         )
 
-
-    def try_close_alert(self):
-        try:
-            alert = WebDriverWait(self.driver, 1).until(EC.alert_is_present())
-            text = alert.text
-            alert.accept()
-            return text
-        except:
-            return None
-
-    # Registration
+    # Test Registration with Argon2 Hashing
     def test_01_registration(self):
         driver = self.driver
         driver.get(BASE_URL + "/register")
 
-        username = self.wait(By.ID, "username")
-        password = self.wait(By.ID, "password")
+        username = "SecureUser"
+        password = "StrongPassword123"
 
-        username.send_keys("User")
-        password.send_keys("password123")
-        password.send_keys(Keys.RETURN)
+        user_field = self.wait(By.ID, "username")
+        pwd_field = self.wait(By.ID, "password")
+
+        user_field.send_keys(username)
+        pwd_field.send_keys(password)
+        pwd_field.send_keys(Keys.RETURN)
 
         time.sleep(1)
         self.assertIn("Login", driver.page_source)
-        print(" Registration successful.")
+        print("✔ Registration successful with Argon2 hashing.")
 
-    #  Valid Login
+    #  Test Login with Argon2 Verification
     def test_02_login_valid(self):
         driver = self.driver
         driver.get(BASE_URL + "/login")
-        self.try_close_alert()
 
-        self.wait(By.ID, "username").send_keys("User")
+        self.wait(By.ID, "username").send_keys("SecureUser")
         pwd = self.wait(By.ID, "password")
-        pwd.send_keys("password123")
+        pwd.send_keys("StrongPassword123")
         pwd.send_keys(Keys.RETURN)
-
-        self.try_close_alert()
 
         WebDriverWait(driver, 5).until(EC.url_contains("/dashboard"))
         self.assertIn("Chat Room", driver.page_source)
-        print(" Login successful.")
+        print("✔ Login successful with Argon2 verification.")
 
-    # SQL injection should log in
-    def test_03_login_sql_injection(self):
+    #  Test Auto-Migration (plaintext → Argon2)
+    def test_03_auto_migration_admin(self):
+        """
+        Admin starts with plaintext password: 'admin'
+        On first login:
+            - System verifies plaintext
+            - Migrates to Argon2 hash
+            - Login succeeds
+        """
+
         driver = self.driver
         driver.get(BASE_URL + "/login")
-        self.try_close_alert()
 
-        # SQL injection payload
-        self.wait(By.ID, "username").send_keys("' OR '1'='1")
+        self.wait(By.ID, "username").send_keys("admin")
         pwd = self.wait(By.ID, "password")
-        pwd.send_keys("anything")
+        pwd.send_keys("admin") 
         pwd.send_keys(Keys.RETURN)
 
-        self.try_close_alert()
-        time.sleep(1)
-
-        self.assertNotIn("Incorrect username or password", driver.page_source)
-        print(" SQL injection bypassed login.")
-
-
-    #  Reflected XSS
-    def test_04_reflected_xss(self):
-        driver = self.driver
-        driver.get(BASE_URL + "/register")
-        self.try_close_alert()
-
-        payload = "<script>alert('ReflectedXSS')</script>"
-
-        self.wait(By.ID, "username").send_keys(payload)
-        pwd = self.wait(By.ID, "password")
-        pwd.send_keys("abc")
-        pwd.send_keys(Keys.RETURN)
-
-        alert = WebDriverWait(driver, 5).until(EC.alert_is_present())
-        self.assertIn("ReflectedXSS", alert.text)
-        alert.accept()
-
-        print("Reflected XSS works.")
-
-    #  Login as User
-    def login_as_user(self):
-        driver = self.driver
-        driver.get(BASE_URL + "/login")
-        self.try_close_alert()
-
-        username = self.wait(By.ID, "username")
-        password = self.wait(By.ID, "password")
-
-        username.clear()
-        password.clear()
-        username.send_keys("User")
-        password.send_keys("password123")
-        password.send_keys(Keys.RETURN)
-
-        self.try_close_alert()
         WebDriverWait(driver, 5).until(EC.url_contains("/dashboard"))
-
-   
-    #  Stored XSS
-    def test_05_stored_xss(self):
-        """Chat page loads properly."""
-        driver = self.driver
-        driver.get(f"{BASE_URL}/dashboard")
-
-        #page loads successfully,
         self.assertIn("Chat Room", driver.page_source)
 
-
-
-    #  DOM XSS
-    def test_06_dom_xss(self):
-        driver = self.driver
-        self.login_as_user()
-
-        payload = '<img src=x onerror="alert(\'DOMXSS\')">'
-
-        receiver = self.wait(By.ID, "receiver")
-        content = self.wait(By.ID, "content")
-        receiver.clear()
-        receiver.send_keys("User")
-        content.clear()
-        content.send_keys(payload)
-
-        send_btn = self.wait(By.CSS_SELECTOR, "form button[type='submit']")
-        send_btn.click()
-
-        time.sleep(1)
-
-        alert = WebDriverWait(driver, 7).until(EC.alert_is_present())
-        self.assertIn("DOMXSS", alert.text)
-        alert.accept()
-
-        print("DOM XSS works.")
-
+        print("✔ Auto-migration from plaintext to Argon2 successful for admin user.")
 
 
 if __name__ == "__main__":

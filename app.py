@@ -1,11 +1,13 @@
 from flask import Flask, request, redirect, session, render_template
 import sqlite3
 from datetime import datetime
+from argon2 import PasswordHasher
 
 app = Flask(__name__)
+ph = PasswordHasher()
 app.secret_key = "insecure_key"
 
-DB_NAME = "insecure.db"
+DB_NAME = "secure.db"
 
 #Setting up db
 def setup_db():
@@ -125,10 +127,13 @@ def register():
         conn = setup_db()
         c = conn.cursor()
         try:
+            hashed_pw = ph.hash(password)
+
             c.execute(
                 "INSERT INTO users(username, password) VALUES (?, ?)",
-                (username, password)
+                (username, hashed_pw)
             )
+            
             conn.commit()
             conn.close()
             return redirect("/login")
