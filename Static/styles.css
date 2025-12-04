@@ -220,3 +220,17 @@ body.chat-page .timestamp {
     bottom: -15px;
     right: 10px;
 }
+
+.password-wrapper {
+    position: relative;
+}
+
+.password-wrapper .toggle-eye {
+    position: absolute;
+    right: 15px;
+    top: 38px; 
+    cursor: pointer;
+    font-size: 18px;
+    user-select: none;
+    color: #34ebdb; 
+}
