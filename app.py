@@ -1,15 +1,19 @@
-from flask import Flask, request, redirect, session, render_template
+from flask import Flask, request, redirect, session, render_template, render_template_string
 import sqlite3
 from datetime import datetime
 from argon2 import PasswordHasher
+import re
 
 app = Flask(__name__)
 app.secret_key = "secure_key"
 
 DB_NAME = "secure.db"
 
-# Argon2id Hasher
+# Argon2id Hash
 ph = PasswordHasher()
+
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
+
 
 # Setting up db
 def setup_db():
@@ -35,7 +39,6 @@ def init_db():
         )
     """)
 
-    # Admin starts with plaintext on purpose
     c.execute("INSERT INTO users(username, password) VALUES ('admin', 'admin')")
 
     c.execute("""
@@ -57,8 +60,7 @@ def init_db():
 def update_last_seen():
     if "user_id" not in session:
         return
-
-    # Prevent last_seen updates during /get_messages fetch
+    
     if request.endpoint == "get_messages":
         return
 
@@ -122,9 +124,8 @@ def register():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-
-        if "<script>" in username:
-            return render_template("register.html", error="Invalid username")
+        if not USERNAME_RE.match(username):
+            return render_template("register.html", error="Username must be 3–32 chars (letters, numbers, underscore).")
 
         hashed_pw = ph.hash(password)
 
@@ -149,13 +150,11 @@ def register():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        username = request.form.get("username", "")
+        username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
         conn = setup_db()
         c = conn.cursor()
-
-        # Secure lookup by username
         c.execute("SELECT * FROM users WHERE username=?", (username,))
         user = c.fetchone()
         conn.close()
@@ -164,8 +163,10 @@ def login():
             return render_template("login.html", error="Incorrect username or password")
 
         stored_pw = user["password"]
+
         try:
             ph.verify(stored_pw, password)
+
             if ph.check_needs_rehash(stored_pw):
                 new_hash = ph.hash(password)
                 conn = setup_db()
@@ -174,7 +175,6 @@ def login():
                 conn.commit()
                 conn.close()
 
-            # Successful login
             session["user_id"] = user["id"]
             session["username"] = user["username"]
             session.pop("chat_with", None)
@@ -182,7 +182,6 @@ def login():
 
         except Exception:
             if stored_pw == password:
-                # Auto migrate plaintext into Argon2
                 new_hash = ph.hash(password)
                 conn = setup_db()
                 c = conn.cursor()
@@ -195,7 +194,6 @@ def login():
                 session.pop("chat_with", None)
                 return redirect("/dashboard")
 
-            # Wrong password
             return render_template("login.html", error="Incorrect username or password")
 
     return render_template("login.html")
@@ -222,13 +220,12 @@ def dashboard():
         if receiver:
             session["chat_with"] = receiver
 
-            # Parameterized user
+            # User lookup is parameterized
             c.execute("SELECT id FROM users WHERE username=?", (receiver,))
             partner = c.fetchone()
 
             if partner:
                 receiver_id = partner["id"]
-                # Parameterized message
                 c.execute("""
                     INSERT INTO messages(sender_id, receiver_id, content)
                     VALUES (?, ?, ?)
@@ -293,15 +290,19 @@ def get_messages():
 
     html = ""
     for msg in msgs:
-        html += f"""
+        html += render_template_string(
+            """
             <div class="message">
-                <strong>{msg['sender']}:</strong> {msg['content']}<br>
-                <small>{msg['created_at']}</small>
+                <strong>{{ sender | e }}:</strong> {{ content | e }}<br>
+                <small>{{ created_at }}</small>
             </div>
-        """
+            """,
+            sender=msg["sender"],
+            content=msg["content"],
+            created_at=msg["created_at"]
+        )
 
     return html
-
 
 # Logout
 @app.route("/logout")
@@ -315,7 +316,6 @@ def logout():
 
     session.clear()
     return redirect("/login")
-
 
 # Start main
 if __name__ == "__main__":

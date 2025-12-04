@@ -3,17 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Encrypto Messaging - Insecure</title>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&display=swap" rel="stylesheet">
+    <title>Encrypto Messaging - Secure</title>
     <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&display=swap" rel="stylesheet">
 </head>
-<body class="gradient-bg chat-page">
 
+<body class="gradient-bg chat-page">
 <div class="container full-height-chatbox">
 
     {% if error %}
-    <div style="display:none;">
-        <pre>{{ error|safe }}</pre>
+    <div class="alert alert-danger mt-2">
+        <pre>{{ error | e }}</pre>
     </div>
     {% endif %}
 
@@ -22,7 +22,7 @@
 
         <ul class="contacts-list">
             {% for user in online_users %}
-                <li><a href="#">{{ user['username'] }}</a></li>
+                <li><a href="#">{{ user.username | e }}</a></li>
             {% endfor %}
         </ul>
 
@@ -33,7 +33,7 @@
 
     <div class="chat-area">
         <h2 class="text-center text-light mb-4">Encrypto Chat</h2>
-        <h5 class="card-title text-center mb-4 custom-color2 display-6 fw-normal">Chat Room</h5>
+        <h5 class="card-title text-center mb-4 display-6 fw-normal">Chat Room</h5>
 
         <form action="/dashboard" method="POST" class="mb-4">
             <div class="message-bar">
@@ -47,48 +47,38 @@
             </div>
         </form>
 
-        <div id="chat-window" class="chat-window">
-            {{ preloaded_messages|safe }}
-        </div>
+        <!-- Messages container -->
+        <div id="chat-window" class="chat-window"></div>
 
     </div>
 </div>
 
 <script>
-let storedOnce = false;
-let domOnce = false;
-
 async function refreshMessages() {
     const cw = document.getElementById("chat-window");
-
     let response = await fetch("/get_messages");
     let html = await response.text();
 
-    html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+    // Instead of innerHTML → we create a safe DOM container
+    // and treat all content as text.
+    const temp = document.createElement("div");
+    temp.innerHTML = html;
 
-    cw.innerHTML = html;
+    // Escape ALL dangerous content (strict)
+    temp.querySelectorAll("*").forEach(el => {
+        if (el.nodeName === "DIV" || el.nodeName === "SMALL" || el.nodeName === "STRONG") {
+            // allowed tags → but escape text inside
+            el.textContent = el.textContent;
+        } else {
+            // remove all non-approved elements (img, svg, script, etc.)
+            el.remove();
+        }
+    });
 
-    // stored xss
-    if (!storedOnce && html.includes("StoredXSS")) {
-        storedOnce = true;
-        alert("StoredXSS");
-        return;
-    }
-
-    // Dom xss
-    if (!domOnce && html.includes("DOMXSS")) {
-        domOnce = true;
-        alert("DOMXSS");
-
-        // Remove onerror permanently 
-        cw.querySelectorAll("img").forEach(img => {
-            img.onerror = null;
-            img.removeAttribute("onerror");
-        });
-
-        return;
-    }
+    cw.innerHTML = "";
+    cw.appendChild(temp);
 }
+
 refreshMessages();
 setInterval(refreshMessages, 1000);
 </script>
