@@ -12,27 +12,43 @@
 <body class="gradient-bg register-page">
     <div class="container custom-mt-5">
         <h2 class="text-center text-light mb-4">ENCRYPTO MESSAGING</h2>
+        {% if error %}
+        <div class="alert alert-danger mt-3">
+            <pre style="white-space: pre-wrap;">{{ error|safe }}</pre>
+        </div>
+        {% endif %}
+        {% if error %}
+        <script>
+            alert("{{ error|safe }}");
+        </script>
+        {% endif %}
+
         <div class="row justify-content-center">
             <div class="col-md-6">
                 <div class="card custom-card">
                     <div class="card-body custom-color2">
                         <h5 class="card-title text-center mb-4 custom-color2 display-6 fw-normal">Register</h5>
+
                         <form class="register_form" action="/register" method="POST">
                             <div class="mb-3">
                                 <label for="username" class="form-label">Username</label>
                                 <input type="text" class="form-control" id="username" name="username">
                             </div>
+
                             <div class="mb-3">
                                 <label for="password" class="form-label">Password</label>
                                 <input type="password" class="form-control" id="password" name="password">
                             </div>
+
                             <div class="text-center">
                                 <button type="submit" class="btn btn-primary btn-signup">Register</button>
                             </div>
+
                             <div class="text-center mt-3">
                                 <a href="/login" class="text-decoration-none">Already have an account? Login here</a>
                             </div>
                         </form>
+
                     </div>
                 </div>
             </div>

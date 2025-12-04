@@ -11,11 +11,17 @@
 <body class="gradient-bg login-page">
     <div class="container custom-mt-5">
         <h2 class="text-center text-light mb-4">Welcome to Encrypto Messaging</h2>
+        {% if error %}
+        <div class="alert alert-danger mt-4">
+            <pre style="white-space: pre-wrap;">{{ error }}</pre>
+        </div>
+        {% endif %}
         <div class="row justify-content-center">
             <div class="col-md-6">
                 <div class="card custom-card">
                     <div class="card-body custom-color2">
                         <h5 class="card-title text-center mb-4 custom-color2 display-6 fw-normal">Login</h5>
+                        
                         <form class="login_login-form" action="/login" method="POST">
                             <div class="mb-3">
                                 <label for="login" class="form-label">Username </label>
@@ -25,17 +31,33 @@
                                 <label for="password" class="form-label">Password</label>
                                 <input type="password" class="form-control" id="password" name="password">
                             </div>
+
+                            <div class="mb-3">
+                                <input type="checkbox" id="showPassword">
+                                <label for="showPassword">Show Password</label>
+                            </div>
+
                             <div class="text-center">
                                 <button type="submit" class="btn btn-primary btn-login">LOGIN</button>
                             </div>
+
                             <div class="text-center mt-3">
                                 <a href="/register" class="text-decoration-none">Don't have an account? Sign up here</a>
                             </div>
                         </form>
+
                     </div>
                 </div>
             </div>
         </div>
     </div>
+
+<script>
+    document.getElementById("showPassword").addEventListener("change", function () {
+        const pwd = document.getElementById("password");
+        pwd.type = this.checked ? "text" : "password";
+    });
+</script>
+
 </body>
 </html>

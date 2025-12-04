@@ -3,65 +3,95 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Encrypto Messaging- Insecure</title>
+    <title>Encrypto Messaging - Insecure</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body class="gradient-bg chat-page">
 
-    <div class="container full-height-chatbox">
-        <div class="sidebar">
-            <h5 class="sidebar-title text-center text-light mb-4">Online</h5>
+<div class="container full-height-chatbox">
 
-            <ul class="contacts-list">
-                {% for user in online_users %}
-                    <li><a href="#">{{ user['username'] }}</a></li>
-                {% endfor %}
-            </ul>
+    {% if error %}
+    <div style="display:none;">
+        <pre>{{ error|safe }}</pre>
+    </div>
+    {% endif %}
 
-            <div class="mt-auto">
-                <a href="/logout" class="logout-link">Logout</a>
-            </div>
+    <div class="sidebar">
+        <h5 class="sidebar-title text-center text-light mb-4">Online</h5>
+
+        <ul class="contacts-list">
+            {% for user in online_users %}
+                <li><a href="#">{{ user['username'] }}</a></li>
+            {% endfor %}
+        </ul>
+
+        <div class="mt-auto">
+            <a href="/logout" class="logout-link">Logout</a>
         </div>
-
-        <div class="chat-area">
-            <h2 class="text-center text-light mb-4">Encrypto chat</h2>
-            <h5 class="card-title text-center mb-4 custom-color2 display-6 fw-normal">Chat Room</h5>
-
-            {% if error %}
-                <p style="color:red;">{{ error|safe }}</p>
-            {% endif %}
-
-            <form action="/dashboard" method="POST" class="mb-4">
-                <div class="message-bar">
-                    <label for="receiver">Recipient's Username</label>
-                    <input type="text" id="receiver" name="receiver" placeholder="Enter recipient's username">
-
-                    <label for="content">Your Message</label>
-                    <textarea id="content" name="content" placeholder="Type message..."></textarea>
-
-                    <button type="submit">Send</button>
-                </div>
-            </form>
-
-            <div id="chat-window" class="chat-window"></div>
-
-        </div> 
-
     </div>
 
-    <script>
-        function refreshMessages() {
-            fetch("/get_messages")
-                .then(response => response.text())
-                .then(html => {
-                    document.getElementById("chat-window").innerHTML = html;
-                });
-        }
+    <div class="chat-area">
+        <h2 class="text-center text-light mb-4">Encrypto Chat</h2>
+        <h5 class="card-title text-center mb-4 custom-color2 display-6 fw-normal">Chat Room</h5>
 
-        setInterval(refreshMessages, 1000);
-        refreshMessages();
-    </script>
+        <form action="/dashboard" method="POST" class="mb-4">
+            <div class="message-bar">
+                <label for="receiver">Recipient's Username</label>
+                <input type="text" id="receiver" name="receiver" placeholder="Enter recipient's username">
+
+                <label for="content">Your Message</label>
+                <textarea id="content" name="content" placeholder="Type message..."></textarea>
+
+                <button type="submit">Send</button>
+            </div>
+        </form>
+
+        <div id="chat-window" class="chat-window">
+            {{ preloaded_messages|safe }}
+        </div>
+
+    </div>
+</div>
+
+<script>
+let storedOnce = false;
+let domOnce = false;
+
+async function refreshMessages() {
+    const cw = document.getElementById("chat-window");
+
+    let response = await fetch("/get_messages");
+    let html = await response.text();
+
+    html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+
+    cw.innerHTML = html;
+
+    // stored xss
+    if (!storedOnce && html.includes("StoredXSS")) {
+        storedOnce = true;
+        alert("StoredXSS");
+        return;
+    }
+
+    // Dom xss
+    if (!domOnce && html.includes("DOMXSS")) {
+        domOnce = true;
+        alert("DOMXSS");
+
+        // Remove onerror permanently 
+        cw.querySelectorAll("img").forEach(img => {
+            img.onerror = null;
+            img.removeAttribute("onerror");
+        });
+
+        return;
+    }
+}
+refreshMessages();
+setInterval(refreshMessages, 1000);
+</script>
 
 </body>
 </html>
