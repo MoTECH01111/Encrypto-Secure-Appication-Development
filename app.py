@@ -3,9 +3,14 @@ import sqlite3
 from datetime import datetime
 from argon2 import PasswordHasher
 import re
+import os
+import json
+import base64
+import hashlib
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 app = Flask(__name__)
-app.secret_key = "secure_key"
+app.secret_key = os.urandom(64)
 
 DB_NAME = "secure.db"
 
@@ -13,6 +18,66 @@ DB_NAME = "secure.db"
 ph = PasswordHasher()
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
+
+# AES-GCM Encryption
+KEY_FILE = "key.json"
+
+
+def load_or_create_key():
+    """
+    Load a 64-byte master key from file, or create it if missing.
+    Stored as hex string; safe to keep out of repo via .gitignore.
+    """
+    if os.path.exists(KEY_FILE):
+        with open(KEY_FILE, "r") as f:
+            data = json.load(f)
+            return data["MASTER_KEY"]
+
+    # 64 random bytes  128 hex chars
+    master_key_bytes = os.urandom(64)
+    master_key_hex = master_key_bytes.hex()
+
+    with open(KEY_FILE, "w") as f:
+        json.dump({"MASTER_KEY": master_key_hex}, f, indent=4)
+
+    return master_key_hex
+
+
+MASTER_KEY_HEX = load_or_create_key()
+MASTER_KEY_BYTES = bytes.fromhex(MASTER_KEY_HEX)
+
+# Derive a 32-byte AES key (256-bit) from the 64-byte master via SHA-256
+AES_KEY = hashlib.sha256(MASTER_KEY_BYTES).digest()
+
+aesgcm = AESGCM(AES_KEY)
+
+
+def encrypt_message(plaintext: str) -> str:
+    """
+    Encrypt message using AES-256-GCM.
+    Returns base64url-encoded string containing nonce + ciphertext.
+    """
+    if plaintext is None:
+        plaintext = ""
+    nonce = os.urandom(12)  # Recommended size for GCM
+    ct = aesgcm.encrypt(nonce, plaintext.encode("utf-8"), None)
+    blob = nonce + ct
+    return base64.urlsafe_b64encode(blob).decode("ascii")
+
+
+def decrypt_message(token: str) -> str:
+    """
+    Decrypt base64url-encoded nonce + ciphertext.
+    Returns plaintext string or error placeholder.
+    """
+    try:
+        data = base64.urlsafe_b64decode(token.encode("ascii"))
+        nonce = data[:12]
+        ct = data[12:]
+        pt = aesgcm.decrypt(nonce, ct, None)
+        return pt.decode("utf-8")
+    except Exception:
+        return "[DECRYPTION ERROR]"
 
 
 # Setting up db
@@ -226,10 +291,14 @@ def dashboard():
 
             if partner:
                 receiver_id = partner["id"]
+
+                # Encrypt message before storing using AES-GCM
+                encrypted_content = encrypt_message(content)
+
                 c.execute("""
                     INSERT INTO messages(sender_id, receiver_id, content)
                     VALUES (?, ?, ?)
-                """, (user_id, receiver_id, content))
+                """, (user_id, receiver_id, encrypted_content))
                 conn.commit()
             else:
                 error = f"User '{receiver}' does not exist."
@@ -290,6 +359,9 @@ def get_messages():
 
     html = ""
     for msg in msgs:
+        # Decrypt message before showing
+        decrypted = decrypt_message(msg["content"])
+
         html += render_template_string(
             """
             <div class="message">
@@ -298,7 +370,7 @@ def get_messages():
             </div>
             """,
             sender=msg["sender"],
-            content=msg["content"],
+            content=decrypted,
             created_at=msg["created_at"]
         )
 
@@ -316,6 +388,7 @@ def logout():
 
     session.clear()
     return redirect("/login")
+
 
 # Start main
 if __name__ == "__main__":
