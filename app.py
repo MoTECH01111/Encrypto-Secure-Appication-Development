@@ -1,18 +1,41 @@
 from flask import Flask, request, redirect, session, render_template, render_template_string
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from argon2 import PasswordHasher
 import re
 import os
 import json
 import base64
 import hashlib
+import time
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-app = Flask(__name__)
-app.secret_key = os.urandom(64)
-
 DB_NAME = "secure.db"
+
+# Persistent Secret key
+SECRET_FILE = "secret.key"
+
+def load_or_create_secret_key():
+    if os.path.exists(SECRET_FILE):
+        with open(SECRET_FILE, "rb") as f:
+            return f.read()
+    key = os.urandom(64)  # 512-bit secret
+    with open(SECRET_FILE, "wb") as f:
+        f.write(key)
+    return key
+
+
+app = Flask(__name__)
+app.secret_key = load_or_create_secret_key()
+
+
+#Secure cookie & session configuration
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=True,   
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(minutes=30)  # session timeout
+)
 
 # Argon2id Hash
 ph = PasswordHasher()
@@ -26,14 +49,14 @@ KEY_FILE = "key.json"
 def load_or_create_key():
     """
     Load a 64-byte master key from file, or create it if missing.
-    Stored as hex string; safe to keep out of repo via .gitignore.
+    Stored as hex string; keep key.json out of repo via .gitignore.
     """
     if os.path.exists(KEY_FILE):
         with open(KEY_FILE, "r") as f:
             data = json.load(f)
             return data["MASTER_KEY"]
 
-    # 64 random bytes  128 hex chars
+    # 64 random bytes -> 128 hex chars
     master_key_bytes = os.urandom(64)
     master_key_hex = master_key_bytes.hex()
 
@@ -120,7 +143,30 @@ def init_db():
     conn.close()
 
 
-# Auto update
+# -----------------------------
+#  SESSION TIMEOUT ENFORCEMENT
+# -----------------------------
+@app.before_request
+def enforce_session_timeout():
+    """
+    Enforce inactivity timeout using server-side timestamp.
+    """
+    if "user_id" not in session:
+        return
+
+    now = int(time.time())
+    last = session.get("last_activity")
+    timeout = int(app.permanent_session_lifetime.total_seconds())
+
+    if last is not None and now - last > timeout:
+        session.clear()
+        return redirect("/login")
+
+    session["last_activity"] = now
+    session.permanent = True
+
+
+# Auto update last_seen
 @app.before_request
 def update_last_seen():
     if "user_id" not in session:
@@ -240,12 +286,17 @@ def login():
                 conn.commit()
                 conn.close()
 
+            # generate session ID on successful login
+            session.clear()
+            session.permanent = True
             session["user_id"] = user["id"]
             session["username"] = user["username"]
+            session["last_activity"] = int(time.time())
             session.pop("chat_with", None)
             return redirect("/dashboard")
 
         except Exception:
+            # Legacy plaintext fallback
             if stored_pw == password:
                 new_hash = ph.hash(password)
                 conn = setup_db()
@@ -254,8 +305,11 @@ def login():
                 conn.commit()
                 conn.close()
 
+                session.clear()
+                session.permanent = True
                 session["user_id"] = user["id"]
                 session["username"] = user["username"]
+                session["last_activity"] = int(time.time())
                 session.pop("chat_with", None)
                 return redirect("/dashboard")
 
@@ -345,12 +399,16 @@ def get_messages():
         return f"<p>User '{chat_with}' not found.</p>"
 
     partner_id = partner["id"]
+
+    # Query ensures the logged-in user is always sender or receiver
     c.execute("""
         SELECT m.content, m.created_at, u.username AS sender
         FROM messages m
         JOIN users u ON m.sender_id = u.id
-        WHERE (m.sender_id=? AND m.receiver_id=?)
-           OR (m.sender_id=? AND m.receiver_id=?)
+        WHERE
+            (m.sender_id = ? AND m.receiver_id = ?)
+            OR
+            (m.sender_id = ? AND m.receiver_id = ?)
         ORDER BY m.created_at ASC
     """, (user_id, partner_id, partner_id, user_id))
 
