@@ -10,6 +10,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 BASE_URL = "http://127.0.0.1:5000"
 
+# Dictionary xss input
 XSS_PAYLOADS = [
     "<script>alert('XSS')</script>",
     "<img src=x onerror=alert('XSS')>",
@@ -23,10 +24,12 @@ class SecurityTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # Config Chrome for automated testing
         options = webdriver.ChromeOptions()
         options.add_argument("--disable-popup-blocking")
         options.add_argument("--disable-notifications")
 
+        # Setting up ChromeDriver using WebDriver Manager
         cls.driver = webdriver.Chrome(
             service=Service(ChromeDriverManager().install()),
             options=options
@@ -37,13 +40,13 @@ class SecurityTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.driver.quit()
 
-
-    # Utility Helpers
+    # Wait for element to load
     def wait(self, by, val, timeout=10):
         return WebDriverWait(self.driver, timeout).until(
             EC.presence_of_element_located((by, val))
         )
 
+    # Detect JS alert
     def get_alert(self, timeout=1):
         try:
             alert = WebDriverWait(self.driver, timeout).until(
@@ -55,6 +58,7 @@ class SecurityTests(unittest.TestCase):
         except:
             return None
 
+    # Checks if  a user exists for tests 
     def ensure_user_exists(self, username, password):
         driver = self.driver
         driver.get(BASE_URL + "/register")
@@ -63,16 +67,14 @@ class SecurityTests(unittest.TestCase):
         self.wait(By.CSS_SELECTOR, "button[type='submit']").click()
         time.sleep(0.5)
 
-    # helper
+    # Logs in test user in a clean session
     def secure_login(self):
         driver = self.driver
 
-        # Reset session
-        driver.delete_all_cookies()
+        driver.delete_all_cookies()# Reset session completely
 
-        # Ensure test user exists
+        # Tries to create test user
         driver.get(BASE_URL + "/register")
-
         try:
             username_field = WebDriverWait(driver, 4).until(
                 EC.presence_of_element_located((By.ID, "username"))
@@ -85,7 +87,7 @@ class SecurityTests(unittest.TestCase):
         except Exception:
             pass
 
-        #login
+        # Now login
         driver.get(BASE_URL + "/login")
 
         try:
@@ -102,7 +104,7 @@ class SecurityTests(unittest.TestCase):
         except Exception as e:
             raise AssertionError("Login form not found or failed to submit.") from e
 
-        # redirect
+        # Make sures dashboard is loaded
         try:
             WebDriverWait(driver, 7).until(EC.url_contains("/dashboard"))
         except Exception:
@@ -112,9 +114,9 @@ class SecurityTests(unittest.TestCase):
             print(driver.page_source[:500])
             raise AssertionError("secure_login() failed: /dashboard did NOT load")
 
-
     # SQL Injection Tests
     def test_01_registration(self):
+        # Checks user registration works with normal valid input
         driver = self.driver
         driver.get(BASE_URL + "/register")
 
@@ -128,6 +130,7 @@ class SecurityTests(unittest.TestCase):
         print("Registration OK")
 
     def test_02_valid_login(self):
+        # Validate login with correct password should succeed
         driver = self.driver
         driver.get(BASE_URL + "/login")
 
@@ -141,6 +144,7 @@ class SecurityTests(unittest.TestCase):
         print("Valid login OK")
 
     def test_03_duplicate_registration(self):
+        # Duplicate username
         driver = self.driver
         driver.get(BASE_URL + "/register")
 
@@ -149,14 +153,15 @@ class SecurityTests(unittest.TestCase):
         self.wait(By.CSS_SELECTOR, "button[type='submit']").click()
 
         time.sleep(1)
-
         self.assertIn("username already exists", driver.page_source.lower())
         print("Duplicate registration blocked")
 
     def test_04_sql_injection_login_blocked(self):
+        # Checks SQL injection in username field
         driver = self.driver
         driver.get(BASE_URL + "/login")
 
+        # Enters SQLi payload
         self.wait(By.ID, "username").send_keys("' OR '1'='1")
         pwd = self.wait(By.ID, "password")
         pwd.send_keys("anything")
@@ -167,8 +172,8 @@ class SecurityTests(unittest.TestCase):
         print("SQLi login blocked")
 
     def test_05_sql_injection_receiver_lookup_blocked(self):
+        # SQL injection does not break message recipient lookup
         driver = self.driver
-
         self.secure_login()
 
         receiver = self.wait(By.ID, "receiver")
@@ -185,19 +190,21 @@ class SecurityTests(unittest.TestCase):
         print("SQLi receiver lookup blocked")
 
     def test_06_sql_injection_message_fetch_blocked(self):
+        # /get_messages must never show SQL errors
         driver = self.driver
-
         driver.get(BASE_URL + "/get_messages")
         page = driver.page_source.lower()
 
         self.assertNotIn("syntax error", page)
         print("SQLi fetch blocked")
 
+
     # XSS Tests
     def test_07_reflected_xss_blocked(self):
         driver = self.driver
         driver.get(BASE_URL + "/login")
 
+        # Enters XSS payload into login fields
         for payload in XSS_PAYLOADS:
             driver.find_element(By.ID, "username").clear()
             driver.find_element(By.ID, "password").clear()
@@ -208,16 +215,16 @@ class SecurityTests(unittest.TestCase):
 
             alert = self.get_alert()
             self.assertIsNone(alert, f"Reflected XSS executed for: {payload}")
-
             self.assertIn("Incorrect username", driver.page_source)
 
         print("Reflected XSS blocked")
 
     def test_08_stored_xss_blocked(self):
+        # Stored XSS must never execute when messages are reloaded
         driver = self.driver
         self.secure_login()
 
-        # Send stored XSS payloads
+        # Checks XSS payloads as messages
         for payload in XSS_PAYLOADS:
             driver.find_element(By.ID, "receiver").clear()
             driver.find_element(By.ID, "content").clear()
@@ -225,15 +232,16 @@ class SecurityTests(unittest.TestCase):
             driver.find_element(By.ID, "receiver").send_keys("XSSUser")
             driver.find_element(By.ID, "content").send_keys(payload)
             driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-
             time.sleep(1)
 
         driver.refresh()
         time.sleep(1)
 
+        # If any alert pops up, stored XSS executed
         alert = self.get_alert()
         self.assertIsNone(alert, "Stored XSS executed!")
 
+        # Messages should appear in HTML escaped
         html = driver.find_element(By.ID, "chat-window").get_attribute("innerHTML")
 
         for payload in XSS_PAYLOADS:
@@ -243,9 +251,10 @@ class SecurityTests(unittest.TestCase):
         print("Stored XSS blocked")
 
     def test_09_dom_xss_blocked(self):
+        # Prevent DOM-based XSS by ensuring sanitized output is rendered as text
         driver = self.driver
         self.secure_login()
-
+        # Uses XSS payloads
         for payload in XSS_PAYLOADS:
             driver.find_element(By.ID, "receiver").clear()
             driver.find_element(By.ID, "content").clear()
@@ -256,23 +265,22 @@ class SecurityTests(unittest.TestCase):
             time.sleep(1)
 
         time.sleep(2)
-
+        # Any alert appears  DOM XSS vulnerability
         alert = self.get_alert()
         self.assertIsNone(alert, "DOM XSS executed!")
 
         html = driver.find_element(By.ID, "chat-window").get_attribute("innerHTML").lower()
 
-        # Extract REAL HTML tags
         import re
         real_tags = re.findall(r"<[^>]+>", html)
 
+        # Check that dangerous attributes are NOT allowed
         forbidden_attributes = ["onerror=", "onload=", "src=\"javascript:", "href=\"javascript:"]
-
         for tag in real_tags:
             for attribute in forbidden_attributes:
                 self.assertNotIn(attribute, tag, f"DOM XSS found inside real tag: {tag}")
 
-        # Forbidden tags
+        # Checks forbidden HTML tags were not rendered
         forbidden_tags = ["<img", "<svg", "<iframe", "<script"]
         for t in forbidden_tags:
             for tag in real_tags:
@@ -280,14 +288,17 @@ class SecurityTests(unittest.TestCase):
 
         print("DOM XSS blocked")
 
+
+
+    # Authentication and Session
     def test_10_bruteforce_lockout(self):
+        # After several failed logins, the account must be locked
         driver = self.driver
 
-        # Ensure user exists (because DB resets)
         self.ensure_user_exists("SecureUser", "StrongPass123")
-
         driver.get(BASE_URL + "/login")
 
+        # logs in 5 times
         for i in range(5):
             self.wait(By.ID, "username").clear()
             self.wait(By.ID, "password").clear()
@@ -299,13 +310,12 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("locked", driver.page_source.lower())
         print("Bruteforce lockout enforced")
 
-    def test_11_session_timeout(self):
+    def test_11_session_timeout(self): # Ensure expired sessions force the user back to login
         driver = self.driver
         self.secure_login()
 
-        driver.delete_all_cookies()
+        driver.delete_all_cookies()  # session expiration
 
-        # Force a real request, not cached
         driver.get(BASE_URL + "/logout")
         driver.get(BASE_URL + "/dashboard")
 
@@ -313,8 +323,7 @@ class SecurityTests(unittest.TestCase):
         self.assertTrue(current.endswith("/login") or "/login" in current)
         print("Session timeout OK")
 
-
-    def test_12_csrf_missing_rejected(self):
+    def test_12_csrf_missing_rejected(self): # checks. if server reject POST requests without CSRF token
         driver = self.driver
         self.secure_login()
 
@@ -327,15 +336,15 @@ class SecurityTests(unittest.TestCase):
         """)
 
         time.sleep(1)
-
         self.assertIn("csrf", result.lower())
         print("CSRF protection OK")
 
-    def test_13_username_unicode_sanitizer(self):
+    #Unicode Filters
+    def test_13_username_unicode_sanitizer(self): # checks invisible Unicode attacks in usernames
         driver = self.driver
         driver.get(BASE_URL + "/register")
 
-        dangerous = "user\u202Eevil"
+        dangerous = "user\u202Eevil"  #Contains RTL override character
 
         self.wait(By.ID, "username").send_keys(dangerous)
         self.wait(By.ID, "password").send_keys("StrongPass123")
@@ -343,12 +352,10 @@ class SecurityTests(unittest.TestCase):
         self.wait(By.CSS_SELECTOR, "form.register_form button[type='submit']").click()
         time.sleep(1)
 
-
         self.assertIn("/login", driver.current_url.lower())
         print("Unicode username sanitized and accepted correctly.")
 
-
-    def test_14_message_unicode_sanitizer(self):
+    def test_14_message_unicode_sanitizer(self): #Test message sanitization against Unicode direction attacks
         driver = self.driver
         self.secure_login()
 
@@ -364,12 +371,13 @@ class SecurityTests(unittest.TestCase):
         time.sleep(1)
 
         html = driver.find_element(By.ID, "chat-window").get_attribute("innerHTML")
-
-        self.assertNotIn("\u202E", html)
+        self.assertNotIn("\u202E", html) # checks dangerous characters were removed
         self.assertNotIn("<script>", html)
         print("Unicode message sanitizer OK")
-    
-    def test_15_message_encryption_decryption(self):
+
+
+    #AES Encryption Tests
+    def test_15_message_encryption_decryption(self): #Checks AES-GCM encryption and decryption
         driver = self.driver
         self.secure_login()
 
@@ -384,19 +392,21 @@ class SecurityTests(unittest.TestCase):
         time.sleep(1)
 
         html = driver.find_element(By.ID, "chat-window").get_attribute("innerHTML")
-
-        self.assertIn(msg, html)
+        self.assertIn(msg, html) # Plaintext must appear after *successful* decryption
         print("AES-GCM encryption/decryption OK")
 
-
+   
+    # Cookie Security Tests
     def test_16_cookie_security_flags(self):
+        # Ensure cookies are set with HttpOnly and Secure flags
         driver = self.driver
         self.secure_login()
-
         cookies = driver.get_cookies()
+        #Find Flask session cookie
         session_cookie = [c for c in cookies if c['name'] == 'session'][0]
-
+        #HttpOnly which Prevents JavaScript access to session cookie  
         self.assertTrue(session_cookie['httpOnly'])
+        # Checkes if  Cookie transmitted only over HTTPS  
         self.assertTrue(session_cookie['secure'])
         print("Secure cookie flags OK")
 
