@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, session, render_template, render_template_string
+from flask import Flask, request, redirect, session, render_template, render_template_string, jsonify
 import sqlite3
 from datetime import datetime, timedelta
 from argon2 import PasswordHasher
@@ -9,6 +9,7 @@ import base64
 import hashlib
 import time
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from flask_wtf.csrf import CSRFProtect, CSRFError
 
 DB_NAME = "secure.db"
 
@@ -27,7 +28,11 @@ def load_or_create_secret_key():
 
 app = Flask(__name__)
 app.secret_key = load_or_create_secret_key()
+app.config["WTF_CSRF_ENABLED"] = True
+app.config["WTF_CSRF_TIME_LIMIT"] = None
 
+
+csrf = CSRFProtect(app)
 
 #Secure cookie & session configuration
 app.config.update(
@@ -446,6 +451,10 @@ def logout():
 
     session.clear()
     return redirect("/login")
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    return jsonify({"error": "CSRF token missing or invalid"}), 400
 
 
 # Start main

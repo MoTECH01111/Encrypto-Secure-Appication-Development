@@ -26,6 +26,7 @@
                         <h5 class="card-title text-center mb-4 custom-color2 display-6 fw-normal">Register</h5>
 
                         <form class="register_form" action="/register" method="POST">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <div class="mb-3">
                                 <label for="username" class="form-label">Username</label>
                                 <input type="text" class="form-control" id="username" name="username">

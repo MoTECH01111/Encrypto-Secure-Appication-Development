@@ -25,6 +25,7 @@
                         <h5 class="card-title text-center mb-4 custom-color2 display-6 fw-normal">Login</h5>
                         
                         <form class="login_login-form" action="/login" method="POST">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <div class="mb-3">
                                 <label for="login" class="form-label">Username</label>
                                 <input type="text" class="form-control" id="username" name="username" placeholder="Enter Username">

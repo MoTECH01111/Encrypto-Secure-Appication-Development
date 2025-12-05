@@ -36,6 +36,7 @@
         <h5 class="card-title text-center mb-4 display-6 fw-normal">Chat Room</h5>
 
         <form action="/dashboard" method="POST" class="mb-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="message-bar">
                 <label for="receiver">Recipient's Username</label>
                 <input type="text" id="receiver" name="receiver" placeholder="Enter recipient's username">
@@ -59,12 +60,12 @@ async function refreshMessages() {
     let response = await fetch("/get_messages");
     let html = await response.text();
 
-    // Instead of innerHTML → we create a safe DOM container
+    // innerHTML → we create a safe DOM container
     // and treat all content as text.
     const temp = document.createElement("div");
     temp.innerHTML = html;
 
-    // Escape ALL dangerous content (strict)
+    // Escape ALL dangerous content 
     temp.querySelectorAll("*").forEach(el => {
         if (el.nodeName === "DIV" || el.nodeName === "SMALL" || el.nodeName === "STRONG") {
             // allowed tags → but escape text inside
