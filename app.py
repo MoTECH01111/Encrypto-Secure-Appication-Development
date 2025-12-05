@@ -8,6 +8,7 @@ import json
 import base64
 import hashlib
 import time
+import unicodedata
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from flask_wtf.csrf import CSRFProtect, CSRFError
 
@@ -20,7 +21,7 @@ def load_or_create_secret_key():
     if os.path.exists(SECRET_FILE):
         with open(SECRET_FILE, "rb") as f:
             return f.read()
-    key = os.urandom(64)  # 512-bit secret
+    key = os.urandom(64) # 512-bit secret
     with open(SECRET_FILE, "wb") as f:
         f.write(key)
     return key
@@ -31,84 +32,104 @@ app.secret_key = load_or_create_secret_key()
 app.config["WTF_CSRF_ENABLED"] = True
 app.config["WTF_CSRF_TIME_LIMIT"] = None
 
-
 csrf = CSRFProtect(app)
 
-#Secure cookie & session configuration
+# Secure cookies & session config
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SECURE=True,   
+    SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    PERMANENT_SESSION_LIFETIME=timedelta(minutes=30)  # session timeout
+    PERMANENT_SESSION_LIFETIME=timedelta(minutes=30)
 )
 
 # Argon2id Hash
 ph = PasswordHasher()
 
+# Username regex after sanitization
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
+
+
+# Sanitizer
+def sanitize_username(username: str) -> str:
+    """Remove invisible, control, and unsafe Unicode from usernames."""
+    if not isinstance(username, str):
+        return ""
+    username = unicodedata.normalize("NFKC", username)
+
+    cleaned = []
+    for ch in username:
+        category = unicodedata.category(ch)
+
+        if category.startswith("C"):
+            continue
+        if category == "Mn":
+            continue
+        if ch.isspace():
+            continue
+
+        cleaned.append(ch)
+
+    return "".join(cleaned)
+
+
+def sanitize_message(text: str) -> str:
+    """Remove invisible control/unicode attacks while allowing emojis."""
+    if not isinstance(text, str):
+        return ""
+    text = unicodedata.normalize("NFKC", text)
+
+    cleaned = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+
+        if cat.startswith("C"):
+            continue
+        if ch in ["\u202E", "\u202D", "\u202B", "\u2066", "\u2067"]:
+            continue
+
+        cleaned.append(ch)
+
+    return "".join(cleaned)
+
 
 # AES-GCM Encryption
 KEY_FILE = "key.json"
 
-
 def load_or_create_key():
-    """
-    Load a 64-byte master key from file, or create it if missing.
-    Stored as hex string; keep key.json out of repo via .gitignore.
-    """
     if os.path.exists(KEY_FILE):
         with open(KEY_FILE, "r") as f:
-            data = json.load(f)
-            return data["MASTER_KEY"]
+            return json.load(f)["MASTER_KEY"]
 
-    # 64 random bytes -> 128 hex chars
-    master_key_bytes = os.urandom(64)
-    master_key_hex = master_key_bytes.hex()
-
+    key_bytes = os.urandom(64)
+    key_hex = key_bytes.hex()
     with open(KEY_FILE, "w") as f:
-        json.dump({"MASTER_KEY": master_key_hex}, f, indent=4)
-
-    return master_key_hex
-
+        json.dump({"MASTER_KEY": key_hex}, f, indent=4)
+    return key_hex
 
 MASTER_KEY_HEX = load_or_create_key()
-MASTER_KEY_BYTES = bytes.fromhex(MASTER_KEY_HEX)
-
-# Derive a 32-byte AES key (256-bit) from the 64-byte master via SHA-256
-AES_KEY = hashlib.sha256(MASTER_KEY_BYTES).digest()
-
+AES_KEY = hashlib.sha256(bytes.fromhex(MASTER_KEY_HEX)).digest()
 aesgcm = AESGCM(AES_KEY)
 
 
 def encrypt_message(plaintext: str) -> str:
-    """
-    Encrypt message using AES-256-GCM.
-    Returns base64url-encoded string containing nonce + ciphertext.
-    """
-    if plaintext is None:
-        plaintext = ""
-    nonce = os.urandom(12)  # Recommended size for GCM
-    ct = aesgcm.encrypt(nonce, plaintext.encode("utf-8"), None)
-    blob = nonce + ct
-    return base64.urlsafe_b64encode(blob).decode("ascii")
+    plaintext = sanitize_message(plaintext)
+    nonce = os.urandom(12)
+    ct = aesgcm.encrypt(nonce, plaintext.encode(), None)
+    return base64.urlsafe_b64encode(nonce + ct).decode()
 
 
 def decrypt_message(token: str) -> str:
-    """
-    Decrypt base64url-encoded nonce + ciphertext.
-    Returns plaintext string or error placeholder.
-    """
     try:
-        data = base64.urlsafe_b64decode(token.encode("ascii"))
+        data = base64.urlsafe_b64decode(token.encode())
         nonce = data[:12]
         ct = data[12:]
         pt = aesgcm.decrypt(nonce, ct, None)
-        return pt.decode("utf-8")
-    except Exception:
+        return pt.decode()
+    except:
         return "[DECRYPTION ERROR]"
 
 
-# Setting up db
+# Db setup
 def setup_db():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
@@ -128,7 +149,9 @@ def init_db():
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
             last_seen DATETIME,
-            is_online INTEGER DEFAULT 0
+            is_online INTEGER DEFAULT 0,
+            failed_attempts INTEGER DEFAULT 0,
+            lockout_until DATETIME DEFAULT NULL
         )
     """)
 
@@ -148,17 +171,23 @@ def init_db():
     conn.close()
 
 
-# -----------------------------
-#  SESSION TIMEOUT ENFORCEMENT
-# -----------------------------
+# Brute-force helper
+def is_locked_out(user_row) -> bool:
+    lockout_until = user_row["lockout_until"]
+    if not lockout_until:
+        return False
+    try:
+        lock_dt = datetime.fromisoformat(lockout_until)
+    except Exception:
+        return False
+    return datetime.now() < lock_dt
+
+
+# Session Timeout
 @app.before_request
 def enforce_session_timeout():
-    """
-    Enforce inactivity timeout using server-side timestamp.
-    """
     if "user_id" not in session:
         return
-
     now = int(time.time())
     last = session.get("last_activity")
     timeout = int(app.permanent_session_lifetime.total_seconds())
@@ -171,22 +200,16 @@ def enforce_session_timeout():
     session.permanent = True
 
 
-# Auto update last_seen
+# Update last seen
 @app.before_request
 def update_last_seen():
-    if "user_id" not in session:
+    if "user_id" not in session or request.endpoint == "get_messages":
         return
-    
-    if request.endpoint == "get_messages":
-        return
-
     try:
         conn = setup_db()
         c = conn.cursor()
         c.execute("""
-            UPDATE users
-            SET last_seen = CURRENT_TIMESTAMP,
-                is_online = 1
+            UPDATE users SET last_seen = CURRENT_TIMESTAMP, is_online = 1
             WHERE id = ?
         """, (session["user_id"],))
         conn.commit()
@@ -196,7 +219,7 @@ def update_last_seen():
         conn.close()
 
 
-# Helpers
+# Helper
 def get_online_users():
     conn = setup_db()
     c = conn.cursor()
@@ -234,24 +257,23 @@ def index():
     return redirect("/login")
 
 
-# Register
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
+        raw_username = request.form.get("username", "")
+        username = sanitize_username(raw_username).strip()
         password = request.form.get("password", "")
+
         if not USERNAME_RE.match(username):
-            return render_template("register.html", error="Username must be 3–32 chars (letters, numbers, underscore).")
+            return render_template("register.html", error="Invalid username.")
 
         hashed_pw = ph.hash(password)
 
         conn = setup_db()
         c = conn.cursor()
         try:
-            c.execute(
-                "INSERT INTO users(username, password) VALUES (?, ?)",
-                (username, hashed_pw)
-            )
+            c.execute("INSERT INTO users(username, password) VALUES (?, ?)",
+                      (username, hashed_pw))
             conn.commit()
             conn.close()
             return redirect("/login")
@@ -262,11 +284,11 @@ def register():
     return render_template("register.html")
 
 
-# Login
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
+        raw_username = request.form.get("username", "")
+        username = sanitize_username(raw_username).strip()
         password = request.form.get("password", "")
 
         conn = setup_db()
@@ -276,13 +298,22 @@ def login():
         conn.close()
 
         if not user:
+            # Unknown username – no lockout tracking
             return render_template("login.html", error="Incorrect username or password")
+
+        # Check lockout
+        if is_locked_out(user):
+            return render_template(
+                "login.html",
+                error="Account locked for 15 minutes due to too many failed attempts. Please try again later."
+            )
 
         stored_pw = user["password"]
 
         try:
             ph.verify(stored_pw, password)
 
+            # If hash needs rehash, upgrade it
             if ph.check_needs_rehash(stored_pw):
                 new_hash = ph.hash(password)
                 conn = setup_db()
@@ -291,39 +322,75 @@ def login():
                 conn.commit()
                 conn.close()
 
-            # generate session ID on successful login
+            # Reset failed attempts + lockout on success
+            conn = setup_db()
+            c = conn.cursor()
+            c.execute("""
+                UPDATE users
+                SET failed_attempts = 0,
+                    lockout_until = NULL
+                WHERE id = ?
+            """, (user["id"],))
+            conn.commit()
+            conn.close()
+
             session.clear()
-            session.permanent = True
             session["user_id"] = user["id"]
             session["username"] = user["username"]
             session["last_activity"] = int(time.time())
-            session.pop("chat_with", None)
             return redirect("/dashboard")
 
         except Exception:
-            # Legacy plaintext fallback
+            # Password mismatch or verify error
+            # Check legacy plaintext
             if stored_pw == password:
+                # Even for legacy, still respect lockout above.
                 new_hash = ph.hash(password)
                 conn = setup_db()
                 c = conn.cursor()
                 c.execute("UPDATE users SET password=? WHERE id=?", (new_hash, user["id"]))
                 conn.commit()
+
+                # Reset failed attempts + lockout on success
+                c.execute("""
+                    UPDATE users
+                    SET failed_attempts = 0,
+                        lockout_until = NULL
+                    WHERE id = ?
+                """, (user["id"],))
+                conn.commit()
                 conn.close()
 
                 session.clear()
-                session.permanent = True
                 session["user_id"] = user["id"]
                 session["username"] = user["username"]
                 session["last_activity"] = int(time.time())
-                session.pop("chat_with", None)
                 return redirect("/dashboard")
+
+            # Handle failed attempt
+            conn = setup_db()
+            c = conn.cursor()
+            current_attempts = user["failed_attempts"] or 0
+            new_attempts = current_attempts + 1
+            lockout_until = None
+
+            if new_attempts >= 4:
+                lock_time = datetime.now() + timedelta(minutes=15)
+                lockout_until = lock_time.isoformat()
+
+            c.execute("""
+                UPDATE users
+                SET failed_attempts = ?, lockout_until = ?
+                WHERE id = ?
+            """, (new_attempts, lockout_until, user["id"]))
+            conn.commit()
+            conn.close()
 
             return render_template("login.html", error="Incorrect username or password")
 
     return render_template("login.html")
 
 
-# Dashboard
 @app.route("/dashboard", methods=["GET", "POST"])
 def dashboard():
     if "user_id" not in session:
@@ -336,28 +403,22 @@ def dashboard():
     conn = setup_db()
     c = conn.cursor()
 
-    # Send message
     if request.method == "POST":
-        receiver = request.form.get("receiver", "").strip()
-        content = request.form.get("content", "")
+        receiver_raw = request.form.get("receiver", "")
+        receiver = sanitize_username(receiver_raw)
+        content = sanitize_message(request.form.get("content", ""))
 
         if receiver:
             session["chat_with"] = receiver
-
-            # User lookup is parameterized
             c.execute("SELECT id FROM users WHERE username=?", (receiver,))
             partner = c.fetchone()
 
             if partner:
-                receiver_id = partner["id"]
-
-                # Encrypt message before storing using AES-GCM
-                encrypted_content = encrypt_message(content)
-
+                encrypted = encrypt_message(content)
                 c.execute("""
                     INSERT INTO messages(sender_id, receiver_id, content)
                     VALUES (?, ?, ?)
-                """, (user_id, receiver_id, encrypted_content))
+                """, (user_id, partner["id"], encrypted))
                 conn.commit()
             else:
                 error = f"User '{receiver}' does not exist."
@@ -365,7 +426,6 @@ def dashboard():
             error = "Recipient username required."
 
     conn.close()
-
     online_users = get_online_users()
 
     return render_template(
@@ -373,11 +433,10 @@ def dashboard():
         username=username,
         online_users=online_users,
         preloaded_messages="",
-        error=error,
+        error=error
     )
 
 
-# Get messages
 @app.route("/get_messages")
 def get_messages():
     if "user_id" not in session:
@@ -405,15 +464,13 @@ def get_messages():
 
     partner_id = partner["id"]
 
-    # Query ensures the logged-in user is always sender or receiver
     c.execute("""
         SELECT m.content, m.created_at, u.username AS sender
         FROM messages m
         JOIN users u ON m.sender_id = u.id
-        WHERE
+        WHERE 
             (m.sender_id = ? AND m.receiver_id = ?)
-            OR
-            (m.sender_id = ? AND m.receiver_id = ?)
+         OR (m.sender_id = ? AND m.receiver_id = ?)
         ORDER BY m.created_at ASC
     """, (user_id, partner_id, partner_id, user_id))
 
@@ -422,24 +479,18 @@ def get_messages():
 
     html = ""
     for msg in msgs:
-        # Decrypt message before showing
         decrypted = decrypt_message(msg["content"])
 
-        html += render_template_string(
-            """
+        html += render_template_string("""
             <div class="message">
                 <strong>{{ sender | e }}:</strong> {{ content | e }}<br>
                 <small>{{ created_at }}</small>
             </div>
-            """,
-            sender=msg["sender"],
-            content=decrypted,
-            created_at=msg["created_at"]
-        )
+        """, sender=msg["sender"], content=decrypted, created_at=msg["created_at"])
 
     return html
 
-# Logout
+
 @app.route("/logout")
 def logout():
     if "user_id" in session:
@@ -451,6 +502,7 @@ def logout():
 
     session.clear()
     return redirect("/login")
+
 
 @app.errorhandler(CSRFError)
 def handle_csrf_error(e):
