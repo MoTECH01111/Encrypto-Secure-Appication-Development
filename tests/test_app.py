@@ -55,6 +55,14 @@ class SecurityTests(unittest.TestCase):
         except:
             return None
 
+    def ensure_user_exists(self, username, password):
+        driver = self.driver
+        driver.get(BASE_URL + "/register")
+        self.wait(By.ID, "username").send_keys(username)
+        self.wait(By.ID, "password").send_keys(password)
+        self.wait(By.CSS_SELECTOR, "button[type='submit']").click()
+        time.sleep(0.5)
+
     # helper
     def secure_login(self):
         driver = self.driver
@@ -106,7 +114,7 @@ class SecurityTests(unittest.TestCase):
 
 
     # SQL Injection Tests
-    def test_registration(self):
+    def test_01_registration(self):
         driver = self.driver
         driver.get(BASE_URL + "/register")
 
@@ -119,7 +127,7 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("Login", driver.page_source)
         print("Registration OK")
 
-    def test_valid_login(self):
+    def test_02_valid_login(self):
         driver = self.driver
         driver.get(BASE_URL + "/login")
 
@@ -132,7 +140,7 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("Chat Room", driver.page_source)
         print("Valid login OK")
 
-    def test_duplicate_registration(self):
+    def test_03_duplicate_registration(self):
         driver = self.driver
         driver.get(BASE_URL + "/register")
 
@@ -142,10 +150,10 @@ class SecurityTests(unittest.TestCase):
 
         time.sleep(1)
 
-        self.assertIn("already exists", driver.page_source.lower())
+        self.assertIn("username already exists", driver.page_source.lower())
         print("Duplicate registration blocked")
 
-    def test_sql_injection_login_blocked(self):
+    def test_04_sql_injection_login_blocked(self):
         driver = self.driver
         driver.get(BASE_URL + "/login")
 
@@ -158,7 +166,7 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("Incorrect username", driver.page_source)
         print("SQLi login blocked")
 
-    def test_sql_injection_receiver_lookup_blocked(self):
+    def test_05_sql_injection_receiver_lookup_blocked(self):
         driver = self.driver
 
         self.secure_login()
@@ -176,7 +184,7 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("does not exist", driver.page_source)
         print("SQLi receiver lookup blocked")
 
-    def test_sql_injection_message_fetch_blocked(self):
+    def test_06_sql_injection_message_fetch_blocked(self):
         driver = self.driver
 
         driver.get(BASE_URL + "/get_messages")
@@ -186,7 +194,7 @@ class SecurityTests(unittest.TestCase):
         print("SQLi fetch blocked")
 
     # XSS Tests
-    def test_reflected_xss_blocked(self):
+    def test_07_reflected_xss_blocked(self):
         driver = self.driver
         driver.get(BASE_URL + "/login")
 
@@ -205,7 +213,7 @@ class SecurityTests(unittest.TestCase):
 
         print("Reflected XSS blocked")
 
-    def test_stored_xss_blocked(self):
+    def test_08_stored_xss_blocked(self):
         driver = self.driver
         self.secure_login()
 
@@ -234,7 +242,7 @@ class SecurityTests(unittest.TestCase):
 
         print("Stored XSS blocked")
 
-    def test_dom_xss_blocked(self):
+    def test_09_dom_xss_blocked(self):
         driver = self.driver
         self.secure_login()
 
@@ -272,35 +280,41 @@ class SecurityTests(unittest.TestCase):
 
         print("DOM XSS blocked")
 
-    def test_bruteforce_lockout(self):
+    def test_10_bruteforce_lockout(self):
         driver = self.driver
+
+        # Ensure user exists (because DB resets)
+        self.ensure_user_exists("SecureUser", "StrongPass123")
+
         driver.get(BASE_URL + "/login")
 
-        for i in range(5):  # 4 failures triggers
+        for i in range(5):
             self.wait(By.ID, "username").clear()
             self.wait(By.ID, "password").clear()
             self.wait(By.ID, "username").send_keys("SecureUser")
             self.wait(By.ID, "password").send_keys("WrongPass")
             self.wait(By.ID, "password").send_keys(Keys.RETURN)
-            time.sleep(1)
+            time.sleep(0.5)
 
         self.assertIn("locked", driver.page_source.lower())
         print("Bruteforce lockout enforced")
 
-    def test_session_timeout(self):
+    def test_11_session_timeout(self):
         driver = self.driver
         self.secure_login()
 
-        # Remove session cookie to simulate timeout
         driver.delete_all_cookies()
+
+        # Force a real request, not cached
+        driver.get(BASE_URL + "/logout")
         driver.get(BASE_URL + "/dashboard")
-        time.sleep(1)
+
         current = driver.current_url.lower()
         self.assertTrue(current.endswith("/login") or "/login" in current)
         print("Session timeout OK")
 
 
-    def test_csrf_missing_rejected(self):
+    def test_12_csrf_missing_rejected(self):
         driver = self.driver
         self.secure_login()
 
@@ -317,7 +331,7 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("csrf", result.lower())
         print("CSRF protection OK")
 
-    def test_username_unicode_sanitizer(self):
+    def test_13_username_unicode_sanitizer(self):
         driver = self.driver
         driver.get(BASE_URL + "/register")
 
@@ -334,7 +348,7 @@ class SecurityTests(unittest.TestCase):
         print("Unicode username sanitized and accepted correctly.")
 
 
-    def test_message_unicode_sanitizer(self):
+    def test_14_message_unicode_sanitizer(self):
         driver = self.driver
         self.secure_login()
 
@@ -355,7 +369,7 @@ class SecurityTests(unittest.TestCase):
         self.assertNotIn("<script>", html)
         print("Unicode message sanitizer OK")
     
-    def test_message_encryption_decryption(self):
+    def test_15_message_encryption_decryption(self):
         driver = self.driver
         self.secure_login()
 
@@ -375,7 +389,7 @@ class SecurityTests(unittest.TestCase):
         print("AES-GCM encryption/decryption OK")
 
 
-    def test_cookie_security_flags(self):
+    def test_16_cookie_security_flags(self):
         driver = self.driver
         self.secure_login()
 
