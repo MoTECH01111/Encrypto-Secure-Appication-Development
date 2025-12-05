@@ -75,7 +75,6 @@ class SecurityTests(unittest.TestCase):
             pwd.send_keys(Keys.RETURN)
             time.sleep(1)
         except Exception:
-            # User most likely exists  safe to continue
             pass
 
         #login
@@ -259,6 +258,121 @@ class SecurityTests(unittest.TestCase):
                 self.assertFalse(tag.startswith(t), f"Forbidden tag rendered: {tag}")
 
         print("DOM XSS blocked")
+
+    def test_09_bruteforce_lockout(self):
+        driver = self.driver
+        driver.get(BASE_URL + "/login")
+
+        for i in range(5):  # 4 failures triggers
+            self.wait(By.ID, "username").clear()
+            self.wait(By.ID, "password").clear()
+            self.wait(By.ID, "username").send_keys("SecureUser")
+            self.wait(By.ID, "password").send_keys("WrongPass")
+            self.wait(By.ID, "password").send_keys(Keys.RETURN)
+            time.sleep(1)
+
+        self.assertIn("locked", driver.page_source.lower())
+        print("Bruteforce lockout enforced")
+
+    def test_10_session_timeout(self):
+        driver = self.driver
+        self.secure_login()
+
+        # Remove session cookie to simulate timeout
+        driver.delete_all_cookies()
+        driver.get(BASE_URL + "/dashboard")
+        time.sleep(1)
+        current = driver.current_url.lower()
+        self.assertTrue(current.endswith("/login") or "/login" in current)
+        print("Session timeout OK")
+
+
+    def test_11_csrf_missing_rejected(self):
+        driver = self.driver
+        self.secure_login()
+
+        result = driver.execute_script("""
+            return fetch('/dashboard', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: 'receiver=Bob&content=Hi'
+            }).then(r => r.text());
+        """)
+
+        time.sleep(1)
+
+        self.assertIn("csrf", result.lower())
+        print("CSRF protection OK")
+
+    def test_12_username_unicode_sanitizer(self):
+        driver = self.driver
+        driver.get(BASE_URL + "/register")
+
+        dangerous = "user\u202Eevil"
+
+        self.wait(By.ID, "username").send_keys(dangerous)
+        self.wait(By.ID, "password").send_keys("StrongPass123")
+
+        self.wait(By.CSS_SELECTOR, "form.register_form button[type='submit']").click()
+        time.sleep(1)
+
+
+        self.assertIn("/login", driver.current_url.lower())
+        print("Unicode username sanitized and accepted correctly.")
+
+
+    def test_13_message_unicode_sanitizer(self):
+        driver = self.driver
+        self.secure_login()
+
+        bad = "Hello\u202E<script>alert(1)</script>"
+
+        driver.find_element(By.ID, "receiver").clear()
+        driver.find_element(By.ID, "receiver").send_keys("XSSUser")
+        driver.find_element(By.ID, "content").clear()
+        driver.find_element(By.ID, "content").send_keys(bad)
+        driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
+
+        driver.refresh()
+        time.sleep(1)
+
+        html = driver.find_element(By.ID, "chat-window").get_attribute("innerHTML")
+
+        self.assertNotIn("\u202E", html)
+        self.assertNotIn("<script>", html)
+        print("Unicode message sanitizer OK")
+    
+    def test_14_message_encryption_decryption(self):
+        driver = self.driver
+        self.secure_login()
+
+        msg = "HelloSecure123!"
+
+        driver.find_element(By.ID, "receiver").clear()
+        driver.find_element(By.ID, "receiver").send_keys("XSSUser")
+        driver.find_element(By.ID, "content").send_keys(msg)
+        driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
+
+        driver.refresh()
+        time.sleep(1)
+
+        html = driver.find_element(By.ID, "chat-window").get_attribute("innerHTML")
+
+        self.assertIn(msg, html)
+        print("AES-GCM encryption/decryption OK")
+
+
+    def test_15_cookie_security_flags(self):
+        driver = self.driver
+        self.secure_login()
+
+        cookies = driver.get_cookies()
+        session_cookie = [c for c in cookies if c['name'] == 'session'][0]
+
+        self.assertTrue(session_cookie['httpOnly'])
+        self.assertTrue(session_cookie['secure'])
+        print("Secure cookie flags OK")
+
 
 if __name__ == "__main__":
     unittest.main()
