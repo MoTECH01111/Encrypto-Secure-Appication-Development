@@ -135,7 +135,6 @@ def register():
         except sqlite3.IntegrityError:
             conn.close()
             return render_template("register.html", error=f"Registration failed for: {username}")
-
     return render_template("register.html")
 
 #Login

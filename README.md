@@ -1,1 +1,1 @@
-# Encrypto_Messaging_Application_SAP
+# Encrypto-Secure-Messaging-Application
